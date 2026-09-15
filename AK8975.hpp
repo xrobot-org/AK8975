@@ -3,24 +3,20 @@
 // clang-format off
 /* === MODULE MANIFEST V2 ===
 module_description: XRobot Module for AKM AK8975 magnetometer sensor
-constructor_args:
-  - rotation:
-      w: 1.0
-      x: 0.0
-      y: 0.0
-      z: 0.0
-  - data_topic_name: "ak8975_mag"
-  - sample_period_ms: 20
-  - task_stack_depth: 1024
-template_args: []
-required_hardware:
-  - ak8975_spi
-  - ramfs
 depends: []
 === END MANIFEST === */
 // clang-format on
 
-#include "app_framework.hpp"
+#include <algorithm>
+#include <array>
+#include <atomic>
+#include <cmath>
+#include <cstdint>
+#include <cstdlib>
+#include <cstring>
+#include <memory>
+
+#include "libxr_def.hpp"
 #include "logger.hpp"
 #include "message.hpp"
 #include "ramfs.hpp"
@@ -28,28 +24,20 @@ depends: []
 #include "thread.hpp"
 #include "transform.hpp"
 
-#include <algorithm>
-#include <array>
-#include <cmath>
-#include <cstdint>
-#include <cstdlib>
-#include <cstring>
-
-#include <atomic>
-
-class AK8975 : public LibXR::Application {
+class AK8975
+{
  public:
-  AK8975(LibXR::HardwareContainer& hw, LibXR::ApplicationManager& app,
+  AK8975(LibXR::SPI& external_ak8975_spi, LibXR::RamFS& external_ramfs,
          LibXR::Quaternion<float>&& rotation, const char* data_topic_name,
          uint32_t sample_period_ms, size_t task_stack_depth)
       : sample_period_ms_(sample_period_ms),
         topic_(LibXR::Topic::CreateTopic<Eigen::Matrix<float, 3, 1>>(data_topic_name)),
-        spi_(hw.template FindOrExit<LibXR::SPI>({"ak8975_spi"})),
+        spi_(std::addressof(external_ak8975_spi)),
         rotation_(std::move(rotation)),
         op_spi_(sem_spi_),
-        cmd_file_(LibXR::RamFS::CreateFile("ak8975", CommandFunc, this)) {
-    app.Register(*this);
-    hw.template FindOrExit<LibXR::RamFS>({"ramfs"})->Add(cmd_file_);
+        cmd_file_(LibXR::RamFS::CreateFile("ak8975", CommandFunc, this))
+  {
+    external_ramfs.Add(cmd_file_);
 
     ASSERT(spi_->SetConfig({.clock_polarity = LibXR::SPI::ClockPolarity::HIGH,
                             .clock_phase = LibXR::SPI::ClockPhase::EDGE_2,
@@ -67,14 +55,17 @@ class AK8975 : public LibXR::Application {
                    LibXR::Thread::Priority::HIGH);
   }
 
-  void OnMonitor() override {
+  void OnMonitor()
+  {
     if (std::isnan(mag_data_.x()) || std::isnan(mag_data_.y()) ||
-        std::isnan(mag_data_.z())) {
+        std::isnan(mag_data_.z()))
+    {
       XR_LOG_WARN("AK8975: NaN data detected.");
     }
   }
 
-  void RequestMagCalibration() {
+  void RequestMagCalibration()
+  {
     mag_cali_requested_.store(true, std::memory_order_release);
   }
 
@@ -83,23 +74,24 @@ class AK8975 : public LibXR::Application {
   static constexpr uint8_t REG_HXL = 0x03;
   static constexpr uint8_t REG_CNTL = 0x0A;
 
-  void WriteReg(uint8_t reg, uint8_t value) {
-    spi_->MemWrite(reg, value, op_spi_);
-  }
+  void WriteReg(uint8_t reg, uint8_t value) { spi_->MemWrite(reg, value, op_spi_); }
 
-  uint8_t ReadReg(uint8_t reg) {
+  uint8_t ReadReg(uint8_t reg)
+  {
     uint8_t value = 0;
     spi_->MemRead(reg, {&value, 1}, op_spi_);
     return value;
   }
 
-  void ReadRegs(uint8_t reg, uint8_t* data, size_t size) {
+  void ReadRegs(uint8_t reg, uint8_t* data, size_t size)
+  {
     spi_->MemRead(reg, {data, size}, op_spi_);
   }
 
   void TriggerMeasurement() { WriteReg(REG_CNTL, 0x01); }
 
-  void BeginCalibration() {
+  void BeginCalibration()
+  {
     calibrating_ = true;
     cali_end_time_ms_ = LibXR::Thread::GetTime() + 15000;
     cali_min_.fill(INT16_MAX);
@@ -107,7 +99,8 @@ class AK8975 : public LibXR::Application {
     XR_LOG_PASS("AK8975: Mag calibration started.");
   }
 
-  void Update() {
+  void Update()
+  {
     uint8_t raw[6] = {0};
     ReadRegs(REG_HXL, raw, sizeof(raw));
 
@@ -118,21 +111,24 @@ class AK8975 : public LibXR::Application {
     Eigen::Matrix<float, 3, 1> mapped;
     mapped << static_cast<float>(-tmp_x), static_cast<float>(tmp_y),
         static_cast<float>(-tmp_z);
-    if (calibrating_) {
-      for (int i = 0; i < 3; ++i) {
+    if (calibrating_)
+    {
+      for (int i = 0; i < 3; ++i)
+      {
         cali_min_[i] = std::min(cali_min_[i], static_cast<int16_t>(mapped[i]));
         cali_max_[i] = std::max(cali_max_[i], static_cast<int16_t>(mapped[i]));
       }
 
-      if (LibXR::Thread::GetTime() >= cali_end_time_ms_) {
+      if (LibXR::Thread::GetTime() >= cali_end_time_ms_)
+      {
         Eigen::Matrix<float, 3, 1> range;
         range << static_cast<float>(cali_max_[0] - cali_min_[0]),
             static_cast<float>(cali_max_[1] - cali_min_[1]),
             static_cast<float>(cali_max_[2] - cali_min_[2]);
         const float avg_radius = (range[0] + range[1] + range[2]) / 3.0f;
-        for (int i = 0; i < 3; ++i) {
-          offset_[i] =
-              static_cast<float>(cali_max_[i] + cali_min_[i]) * 0.5f;
+        for (int i = 0; i < 3; ++i)
+        {
+          offset_[i] = static_cast<float>(cali_max_[i] + cali_min_[i]) * 0.5f;
           scale_[i] = range[i] > 1.0f ? avg_radius / range[i] : 1.0f;
         }
         calibrating_ = false;
@@ -149,14 +145,18 @@ class AK8975 : public LibXR::Application {
     TriggerMeasurement();
   }
 
-  void CheckCalibrationRequest() {
-    if (mag_cali_requested_.exchange(false, std::memory_order_acq_rel)) {
+  void CheckCalibrationRequest()
+  {
+    if (mag_cali_requested_.exchange(false, std::memory_order_acq_rel))
+    {
       BeginCalibration();
     }
   }
 
-  static void ThreadFunc(AK8975* ak8975) {
-    while (true) {
+  static void ThreadFunc(AK8975* ak8975)
+  {
+    while (true)
+    {
       ak8975->CheckCalibrationRequest();
       ak8975->Update();
       ak8975->topic_.Publish(ak8975->mag_data_);
@@ -164,23 +164,26 @@ class AK8975 : public LibXR::Application {
     }
   }
 
-  static int CommandFunc(AK8975* ak8975, int argc, char** argv) {
-    if (argc == 1) {
+  static int CommandFunc(AK8975* ak8975, int argc, char** argv)
+  {
+    if (argc == 1)
+    {
       LibXR::STDIO::Printf<"Usage:\r\n">();
       LibXR::STDIO::Printf<
           "  show [time_ms] [interval_ms] - Print magnetometer data periodically.\r\n">();
       return 0;
     }
 
-    if (argc == 4 && std::strcmp(argv[1], "show") == 0) {
+    if (argc == 4 && std::strcmp(argv[1], "show") == 0)
+    {
       int time_ms = std::atoi(argv[2]);
       int interval_ms = std::atoi(argv[3]);
       interval_ms = std::clamp(interval_ms, 10, 1000);
 
-      while (time_ms > 0) {
+      while (time_ms > 0)
+      {
         LibXR::STDIO::Printf<"AK8975: x=%f y=%f z=%f\r\n">(
-            ak8975->mag_data_.x(), ak8975->mag_data_.y(),
-            ak8975->mag_data_.z());
+            ak8975->mag_data_.x(), ak8975->mag_data_.y(), ak8975->mag_data_.z());
         LibXR::Thread::Sleep(interval_ms);
         time_ms -= interval_ms;
       }
