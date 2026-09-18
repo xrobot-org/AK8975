@@ -27,17 +27,21 @@ depends: []
 class AK8975
 {
  public:
-  AK8975(LibXR::SPI& external_ak8975_spi, LibXR::RamFS& external_ramfs,
-         LibXR::Quaternion<float>&& rotation, const char* data_topic_name,
-         uint32_t sample_period_ms, size_t task_stack_depth)
+  AK8975(
+      LibXR::SPI& spi,
+      LibXR::RamFS& ramfs,
+      LibXR::Quaternion<float>&& rotation = {1.0f, 0.0f, 0.0f, 0.0f},
+      const char* data_topic_name = "ak8975_mag",
+      uint32_t sample_period_ms = 20,
+      size_t task_stack_depth = 1024)
       : sample_period_ms_(sample_period_ms),
         topic_(LibXR::Topic::CreateTopic<Eigen::Matrix<float, 3, 1>>(data_topic_name)),
-        spi_(std::addressof(external_ak8975_spi)),
+        spi_(std::addressof(spi)),
         rotation_(std::move(rotation)),
         op_spi_(sem_spi_),
         cmd_file_(LibXR::RamFS::CreateFile("ak8975", CommandFunc, this))
   {
-    external_ramfs.Add(cmd_file_);
+    ramfs.Add(cmd_file_);
 
     ASSERT(spi_->SetConfig({.clock_polarity = LibXR::SPI::ClockPolarity::HIGH,
                             .clock_phase = LibXR::SPI::ClockPhase::EDGE_2,
