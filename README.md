@@ -1,62 +1,105 @@
 # AK8975
 
-## Static assembly source line
+XRobot Module for the AKM AK8975 3-axis magnetometer over SPI.
 
-This source line uses explicit C++ constructor dependencies and ordered instance
-arguments. Inspect the current primary header with `xrobot_mod_parser --path .`;
-its declarations, not old manifest/config examples, define the interface.
-Historical HardwareContainer/ApplicationManager examples below apply only to the
-older dynamic source tags. Device/protocol descriptions remain relevant.
-See the XRobot [migration guide](https://github.com/xrobot-org/XRobot/blob/dev/MIGRATION.md).
-Compilation is not hardware validation; retain version-specific board evidence.
+The constructor configures the SPI handle (CPOL high, CPHA second edge, prescaler
+DIV_4), reads the `WIA` register and asserts that the chip ID is `0x48`, then starts
+a single measurement and creates the `ak8975_thread` thread (high priority).
 
+Every `sample_period_ms` milliseconds the thread reads the six data registers,
+maps the raw axes to `(-X, +Y, -Z)`, subtracts the calibration offset, multiplies by
+the per-axis scale, applies `rotation` (sensor frame to application frame),
+publishes the result and triggers the next single measurement. Values are raw
+sensor counts (no conversion to µT); offset and scale start at 0 and 1.
 
-AKM AK8975 SPI 3-axis magnetometer sensor module for XRobot.
+The SPI handle is prepared by the BSP. If the sensor shares a physical SPI bus with
+other devices, chip-select handling and bus locking belong in that handle.
 
-This module initializes the magnetometer over a device-level SPI handle, samples
-magnetic field data in a background thread, applies the configured sensor-frame
-to application-frame rotation, publishes calibrated magnetic field vectors, and
-provides a RamFS shell command for status output and runtime calibration.
+## Topics
 
-The `ak8975_spi` handle is expected to be prepared by the User layer. If the
-sensor shares a physical SPI bus with other devices, chip-select handling and bus
-locking should be encapsulated in that handle.
+| Topic | Type | Content |
+| --- | --- | --- |
+| `data_topic_name` (default `ak8975_mag`) | `Eigen::Matrix<float, 3, 1>` | Magnetic field vector, calibrated and rotated, raw counts |
 
-## Required Hardware
+## Calibration
 
-- `ak8975_spi`
-- `ramfs`
+`RequestMagCalibration()` requests a hard/soft-iron calibration. The thread then
+records the per-axis minimum and maximum for 15 s while the sensor is rotated in all
+directions, sets the offset to the midpoint and the scale to the average range divided
+by each axis range. The result is kept in RAM only.
 
-## Constructor Arguments
+## RamFS command
 
-- `rotation`: sensor-frame to application-frame quaternion
-- `data_topic_name`: default `"ak8975_mag"`
-- `sample_period_ms`: default `20`
-- `task_stack_depth`: default `1024`
+The Module registers the `ak8975` command in RamFS.
 
-## Published Topics
+- `ak8975`: print usage.
+- `ak8975 show <time_ms> <interval_ms>`: print the latest magnetic field vector every
+  `interval_ms` (clamped to 10-1000 ms) for `time_ms`.
 
-- `data_topic_name`: `Eigen::Matrix<float, 3, 1>`, magnetic field vector
+`OnMonitor()` logs a warning when the latest data contains NaN.
 
-## Shell Commands
+## Dependencies
 
-The module registers `ak8975` in `RamFS`.
+No other Modules; LibXR only.
 
-- `ak8975` or `ak8975 status`: print chip ID, latest magnetic field data, and calibration state
-- `ak8975 cali`: collect magnetic field extrema and update runtime offset / scale calibration
+## Constructor
 
-## XRobot Configuration Example
+```cpp
+AK8975(LibXR::SPI& spi,
+       LibXR::RamFS& ramfs,
+       LibXR::Quaternion<float>&& rotation = {1.0f, 0.0f, 0.0f, 0.0f},
+       const char* data_topic_name = "ak8975_mag",
+       uint32_t sample_period_ms = 20,
+       size_t task_stack_depth = 1024);
+```
+
+Dependencies:
+
+- `spi`: `LibXR::SPI` device handle of the AK8975.
+- `ramfs`: `LibXR::RamFS` that receives the `ak8975` command.
+
+Configuration:
+
+- `rotation`: quaternion `{w, x, y, z}` from sensor frame to application frame,
+  default identity.
+- `data_topic_name`: name of the published topic, default `"ak8975_mag"`.
+- `sample_period_ms`: sleep between samples in ms, default 20.
+- `task_stack_depth`: stack depth of the sampling thread, default 1024.
+
+## Use
+
+```sh
+xrobot module add xrobot-org/AK8975
+xrobot setup
+xrobot instance add xrobot-org/AK8975
+```
+
+`xrobot instance add` writes an instance to `User/xrobot.yaml` with empty
+dependencies and the source defaults; set the dependencies to the names of objects
+the BSP registers with `XR_REGISTER`:
 
 ```yaml
-- id: mag
-  name: AK8975
-  constructor_args:
-    rotation:
-      w: 1.0
-      x: 0.0
-      y: 0.0
-      z: 0.0
-    data_topic_name: "ak8975_mag"
-    sample_period_ms: 20
-    task_stack_depth: 1024
+modules:
+  - module: xrobot-org/AK8975
+    id: ak8975_0
+    args:
+      - spi: spi_ak8975
+      - ramfs: ramfs
+      - rotation: '{1.0f, 0.0f, 0.0f, 0.0f}'
+      - data_topic_name: '"ak8975_mag"'
+      - sample_period_ms: '20'
+      - task_stack_depth: '1024'
 ```
+
+BSP side:
+
+```cpp
+XR_REGISTER(spi_ak8975, LibXR::SPI);
+XR_REGISTER(ramfs, LibXR::RamFS);
+```
+
+Run `xrobot setup` again to generate `User/xrobot_main.hpp`.
+
+`xrobot module show .` in this repository, or
+`xrobot module show Modules/xrobot-org/AK8975` in a BSP, prints the manifest and the
+current constructor.
