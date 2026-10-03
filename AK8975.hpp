@@ -24,9 +24,33 @@ depends: []
 #include "thread.hpp"
 #include "transform.hpp"
 
+/**
+ * @brief AK8975 三轴磁力计驱动模块，周期读取磁场并发布到 Topic。
+ *        Driver Module for the AK8975 3-axis magnetometer; it samples the magnetic field
+ *        periodically and publishes it to a Topic.
+ */
 class AK8975
 {
  public:
+  /**
+   * @brief 构造 AK8975，配置 SPI、校验芯片 ID、触发首次测量并创建采样线程。
+   *        Construct AK8975: configure the SPI, check the chip ID, trigger the first
+   *        measurement and create the sampling thread.
+   *
+   * @param spi AK8975 所在的 SPI。
+   *            SPI of the AK8975.
+   * @param ramfs 接收 `ak8975` 命令的 RamFS。
+   *              RamFS that receives the `ak8975` command.
+   * @param rotation 传感器坐标系到应用坐标系的四元数 (w, x, y, z)。
+   *                 Quaternion (w, x, y, z) from the sensor frame to the application
+   *                 frame.
+   * @param data_topic_name 发布磁场向量的 Topic 名称。
+   *                        Name of the Topic that publishes the magnetic field vector.
+   * @param sample_period_ms 两次采样之间的休眠时间，单位 ms。
+   *                         Sleep between two samples in ms.
+   * @param task_stack_depth 采样线程栈深。
+   *                         Stack depth of the sampling thread.
+   */
   AK8975(
       LibXR::SPI& spi,
       LibXR::RamFS& ramfs,
@@ -59,6 +83,10 @@ class AK8975
                    LibXR::Thread::Priority::HIGH);
   }
 
+  /**
+   * @brief 监控回调：最新数据含 NaN 时输出警告日志。
+   *        Monitor callback: log a warning when the latest data contains NaN.
+   */
   void OnMonitor()
   {
     if (std::isnan(mag_data_.x()) || std::isnan(mag_data_.y()) ||
@@ -68,6 +96,11 @@ class AK8975
     }
   }
 
+  /**
+   * @brief 请求硬铁/软铁校准；采样线程在下一轮开始 15 s 的最小最大值记录。
+   *        Request a hard-iron / soft-iron calibration; the sampling thread starts a
+   *        15 s min/max recording on its next iteration.
+   */
   void RequestMagCalibration()
   {
     mag_cali_requested_.store(true, std::memory_order_release);
