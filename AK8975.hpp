@@ -2,7 +2,7 @@
 
 // clang-format off
 /* === MODULE MANIFEST V2 ===
-module_description: XRobot Module for AKM AK8975 magnetometer sensor
+module_description: AK8975 三轴磁力计（SPI）驱动模块 / Driver Module for the AK8975 3-axis magnetometer over SPI
 depends: []
 === END MANIFEST === */
 // clang-format on
