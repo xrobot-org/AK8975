@@ -51,7 +51,7 @@ AK8975(LibXR::SPI& spi,
 - `rotation`：从传感器坐标系到应用坐标系的四元数 `{w, x, y, z}`，默认单位四元数。
 - `data_topic_name`：发布的 Topic 名称，默认 `"ak8975_mag"`。
 - `sample_period_ms`：两次采样之间的休眠时间，单位 ms，默认 20。
-- `task_stack_depth`：采样线程的栈深，默认 1024。
+- `task_stack_depth`：采样线程的栈深，单位字节，默认 1024。
 
 Dependencies:
 
@@ -63,7 +63,7 @@ Configuration parameters:
 - `rotation`: quaternion `{w, x, y, z}` from the sensor frame to the application frame, default identity.
 - `data_topic_name`: name of the published Topic, default `"ak8975_mag"`.
 - `sample_period_ms`: sleep between two samples in ms, default 20.
-- `task_stack_depth`: stack depth of the sampling thread, default 1024.
+- `task_stack_depth`: stack depth of the sampling thread in bytes, default 1024.
 
 ## 3. Topic
 
